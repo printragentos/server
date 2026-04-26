@@ -218,8 +218,8 @@ export function DeployTokenForm({ wallet, isMobile = false }) {
       const data = await apiFetch("/printr/quote", {
         method: "POST",
         body: {
-          chains:        [chain],          // FIX: array
-          supplyPercent: Number(supply),   // FIX: camelCase, numeric
+          chains:         [chain],
+          supply_percent: Number(supply),  // backend expects snake_case
         },
       });
       setQuote(data);
@@ -249,8 +249,8 @@ export function DeployTokenForm({ wallet, isMobile = false }) {
       const payload = {
         name:          name.trim(),
         symbol:        symbol.trim().toUpperCase(),
-        chains:        [chain],          // FIX: array
-        supplyPercent: Number(supply),   // FIX: camelCase, numeric
+        chains:         [chain],
+        supply_percent: Number(supply),  // backend expects snake_case
         description:   description.trim() || undefined,
         imageUrl:      imageUrl.trim()   || undefined,
         socials: {
