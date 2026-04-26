@@ -320,10 +320,11 @@ function HamburgerBtn({ open, onClick }) {
       {open ? (
         <span style={{ fontSize: 18, color: T.amber, lineHeight: 1 }}>×</span>
       ) : (
+        // FIX: navbar alignment — all 3 lines same width/height, centered, no offset
         <>
-          <span style={{ width: 18, height: 1.5, background: T.sub, display: "block", borderRadius: 1 }} />
-          <span style={{ width: 18, height: 1.5, background: T.sub, display: "block", borderRadius: 1 }} />
-          <span style={{ width: 12, height: 1.5, background: T.sub, display: "block", borderRadius: 1, alignSelf: "flex-start", marginLeft: 3 }} />
+          <span style={{ width: 20, height: 2, background: T.sub, display: "block", borderRadius: 1 }} />
+          <span style={{ width: 20, height: 2, background: T.sub, display: "block", borderRadius: 1 }} />
+          <span style={{ width: 20, height: 2, background: T.sub, display: "block", borderRadius: 1 }} />
         </>
       )}
     </button>
@@ -1196,7 +1197,8 @@ export default function App() {
         </div>
 
         {/* Tab content */}
-        <main style={{ flex: 1, overflow: "hidden" }} key={tab}>
+        {/* FIX: mobile scroll — deploy tab content must not be clipped */}
+        <main style={{ flex: 1, overflow: tab === "deploy" ? "auto" : "hidden" }} key={tab}>
           {tab === "run"       && <RunTab       agents={agents} onAgentsChange={loadAgents} isMobile={isMobile} />}
           {tab === "agents"    && <AgentsTab    agents={agents} onRefresh={loadAgents}      isMobile={isMobile} />}
           {tab === "pipelines" && <PipelinesTab agents={agents}                             isMobile={isMobile} />}
