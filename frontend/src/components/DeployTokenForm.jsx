@@ -74,7 +74,7 @@ function SelectInput({ value, onChange, options, disabled }) {
 
 // ─── Quote result card (shown inline after successful quote fetch) ─────────────
 
-function QuoteCard({ quote, name, symbol, chain, supply, onEdit, onConfirm, deploying, isMobile }) {
+function QuoteCard({ quote, name, symbol, chain, supply, onEdit, onConfirm, deploying, walletMissing, isMobile }) {
   const chainLabel = CHAIN_OPTIONS.find(c => c.value === chain)?.label ?? chain;
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
@@ -117,7 +117,20 @@ function QuoteCard({ quote, name, symbol, chain, supply, onEdit, onConfirm, depl
         ))}
       </div>
 
-      {/* Warning */}
+      {/* Wallet missing — must connect before deploy */}
+      {walletMissing && (
+        <div style={{
+          padding: isMobile ? "11px 14px" : "9px 12px",
+          background: T.red + "0a", border: `1px solid ${T.red}30`, borderRadius: 2,
+          fontSize: isMobile ? 13 : 11, color: T.red, lineHeight: 1.7,
+          display: "flex", gap: 7,
+        }}>
+          <span style={{ flexShrink: 0 }}>×</span>
+          Connect a wallet before deploying — <code style={{ fontFamily: T.mono }}>creator_address</code> is required.
+        </div>
+      )}
+
+      {/* On-chain warning */}
       <div style={{
         padding: isMobile ? "11px 14px" : "9px 12px",
         background: T.yellow + "08", border: `1px solid ${T.yellow}25`, borderRadius: 2,
@@ -147,15 +160,15 @@ function QuoteCard({ quote, name, symbol, chain, supply, onEdit, onConfirm, depl
 
         <button
           onClick={onConfirm}
-          disabled={deploying}
+          disabled={deploying || walletMissing}
           style={{
             flex: isMobile ? undefined : 2,
             padding: isMobile ? "13px 16px" : "10px 14px",
-            background: deploying ? T.amberGlow : T.amber,
+            background: deploying || walletMissing ? T.amberGlow : T.amber,
             border: `1px solid ${T.amber}`, borderRadius: 2,
-            color: deploying ? T.amber : "#0c0c0a",
+            color: deploying || walletMissing ? T.amber : "#0c0c0a",
             fontSize: isMobile ? 13 : 12, fontFamily: T.mono, fontWeight: 600,
-            cursor: deploying ? "not-allowed" : "pointer",
+            cursor: deploying || walletMissing ? "not-allowed" : "pointer",
             letterSpacing: "0.06em", minHeight: isMobile ? 50 : 40,
             display: "flex", alignItems: "center", justifyContent: "center", gap: 7,
           }}
@@ -245,23 +258,24 @@ export function DeployTokenForm({ wallet, isMobile = false }) {
   const deploy = useCallback(async () => {
     setDeploying(true);
     try {
-      // FIX: chains array + supplyPercent in deploy payload too
+      // creator_address is required by backend — guard before sending
+      if (!wallet?.isConnected || !wallet?.address) {
+        throw new Error("Connect a wallet before deploying.");
+      }
+
       const payload = {
-        name:          name.trim(),
-        symbol:        symbol.trim().toUpperCase(),
-        chains:         [chain],
-        supply_percent: Number(supply),  // backend expects snake_case
-        description:   description.trim() || undefined,
-        imageUrl:      imageUrl.trim()   || undefined,
+        name:             name.trim(),
+        symbol:           symbol.trim().toUpperCase(),
+        chains:           [chain],
+        supply_percent:   Number(supply),
+        creator_address:  wallet.address,  // required by backend schema
+        description:      description.trim() || undefined,
+        imageUrl:         imageUrl.trim()   || undefined,
         socials: {
           website: website.trim() || undefined,
           twitter: twitter.trim() || undefined,
         },
       };
-
-      if (wallet?.isConnected) {
-        payload.deployer = wallet.address;
-      }
 
       const data = await apiFetch("/printr/token", { method: "POST", body: payload });
 
@@ -510,6 +524,7 @@ export function DeployTokenForm({ wallet, isMobile = false }) {
               onEdit={() => setQuote(null)}
               onConfirm={openConfirm}
               deploying={deploying}
+              walletMissing={!wallet?.isConnected}
               isMobile={isMobile}
             />
           )}
