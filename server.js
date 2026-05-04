@@ -704,10 +704,36 @@ app.post("/api/printr/quote", {
 });
 
 app.post("/api/printr/token", {
-  schema: { body: { type: "object", required: ["name","symbol","description","chains","creator_address","supply_percent"], properties: { name: { type: "string" }, symbol: { type: "string" }, description: { type: "string" }, chains: { type: "array", items: { type: "string" } }, creator_address: { type: "string" }, supply_percent: { type: "number" }, auto_sign: { type: "boolean", default: false }, graduation_threshold: { type: "number" }, image_base64: { type: "string" }, website: { type: "string" }, twitter: { type: "string" }, telegram: { type: "string" }, fee_sink: { type: "string" } } } },
+  schema: { body: { type: "object", required: ["name","symbol","chains","creator_address","supply_percent"], properties: { name: { type: "string" }, symbol: { type: "string" }, description: { type: "string" }, chains: { type: "array", items: { type: "string" } }, creator_address: { type: "string" }, supply_percent: { type: "number" }, graduation_threshold: { type: "number" }, image_base64: { type: "string" }, website: { type: "string" }, twitter: { type: "string" }, telegram: { type: "string" }, fee_sink: { type: "string" } } } },
 }, async (req, reply) => {
-  try   { return reply.status(201).send(await executeTool("printr_create_token", req.body)); }
-  catch (e) { return reply.status(400).send({ error: e.message }); }
+  try {
+    const body           = req.body;
+    const homeChain      = body.chains?.[0] ?? "";
+    const creatorAccount = `${homeChain}:${body.creator_address}`;
+    const result = await printrCreateToken({
+      name:             body.name,
+      symbol:           body.symbol,
+      description:      body.description ?? "",
+      image:            body.image_base64 ?? PLACEHOLDER_IMAGE,
+      chains:           body.chains,
+      creatorAccounts:  [creatorAccount],
+      supplyPercent:    body.supply_percent,
+      graduationThresholdUsd: body.graduation_threshold,
+      feeSink:          body.fee_sink,
+      externalLinks:    (body.website || body.twitter || body.telegram)
+        ? { website: body.website, x: body.twitter, telegram: body.telegram }
+        : undefined,
+    });
+    return reply.status(201).send({
+      token_id:     result.token_id,
+      quote:        result.quote,
+      payload:      result.payload ?? null,
+      payload_type: result.payload?.calldata ? "evm" : result.payload?.ixs ? "svm" : "unknown",
+      message:      `Token registered. Sign payload to broadcast. Token ID: ${result.token_id}`,
+    });
+  } catch (e) {
+    return reply.status(400).send({ error: e.message });
+  }
 });
 
 app.get("/api/printr/token/:id", async (req, reply) => {

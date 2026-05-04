@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { T } from "../theme.js";
 import { ConfirmActionModal } from "./ConfirmActionModal.jsx";
 import { TransactionResult } from "./TransactionResult.jsx";
@@ -74,7 +74,7 @@ function SelectInput({ value, onChange, options, disabled }) {
 
 // ─── Quote result card (shown inline after successful quote fetch) ─────────────
 
-function QuoteCard({ quote, name, symbol, chain, supply, onEdit, onConfirm, deploying, walletMissing, isMobile }) {
+function QuoteCard({ quote, name, symbol, chain, supply, onEdit, onConfirm, deploying, deployLabel, walletMissing, networkMismatch, isMobile }) {
   const chainLabel = CHAIN_OPTIONS.find(c => c.value === chain)?.label ?? chain;
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
@@ -130,6 +130,21 @@ function QuoteCard({ quote, name, symbol, chain, supply, onEdit, onConfirm, depl
         </div>
       )}
 
+      {/* Network mismatch — wallet on wrong chain */}
+      {!walletMissing && networkMismatch && (
+        <div style={{
+          padding: isMobile ? "11px 14px" : "9px 12px",
+          background: T.red + "0a", border: `1px solid ${T.red}30`, borderRadius: 2,
+          fontSize: isMobile ? 13 : 11, color: T.red, lineHeight: 1.7,
+          display: "flex", gap: 7,
+        }}>
+          <span style={{ flexShrink: 0 }}>⚠</span>
+          Your wallet is on the wrong network. Switch to{" "}
+          <strong>{CHAIN_OPTIONS.find(c => c.value === chain)?.label ?? chain}</strong>{" "}
+          in your wallet before deploying.
+        </div>
+      )}
+
       {/* On-chain warning */}
       <div style={{
         padding: isMobile ? "11px 14px" : "9px 12px",
@@ -160,15 +175,15 @@ function QuoteCard({ quote, name, symbol, chain, supply, onEdit, onConfirm, depl
 
         <button
           onClick={onConfirm}
-          disabled={deploying || walletMissing}
+          disabled={deploying || walletMissing || networkMismatch}
           style={{
             flex: isMobile ? undefined : 2,
             padding: isMobile ? "13px 16px" : "10px 14px",
-            background: deploying || walletMissing ? T.amberGlow : T.amber,
+            background: deploying || walletMissing || networkMismatch ? T.amberGlow : T.amber,
             border: `1px solid ${T.amber}`, borderRadius: 2,
-            color: deploying || walletMissing ? T.amber : "#0c0c0a",
+            color: deploying || walletMissing || networkMismatch ? T.amber : "#0c0c0a",
             fontSize: isMobile ? 13 : 12, fontFamily: T.mono, fontWeight: 600,
-            cursor: deploying || walletMissing ? "not-allowed" : "pointer",
+            cursor: deploying || walletMissing || networkMismatch ? "not-allowed" : "pointer",
             letterSpacing: "0.06em", minHeight: isMobile ? 50 : 40,
             display: "flex", alignItems: "center", justifyContent: "center", gap: 7,
           }}
@@ -180,7 +195,7 @@ function QuoteCard({ quote, name, symbol, chain, supply, onEdit, onConfirm, depl
                 border: `1.5px solid ${T.amber}30`, borderTopColor: T.amber,
                 animation: "spin .6s linear infinite", flexShrink: 0,
               }} />
-              DEPLOYING…
+              {deployLabel ? deployLabel() : "DEPLOYING…"}
             </>
           ) : "CONFIRM & DEPLOY"}
         </button>
@@ -205,10 +220,20 @@ export function DeployTokenForm({ wallet, isMobile = false }) {
   const [quote,       setQuote]       = useState(null);   // null → no quote yet
   const [quoting,     setQuoting]     = useState(false);
   const [quoteErr,    setQuoteErr]    = useState(null);
-  // FIX: confirming now only opens after quote is shown inline
   const [confirming,  setConfirming]  = useState(false);
   const [deploying,   setDeploying]   = useState(false);
+  // "idle" | "creating" | "waiting_wallet" | "broadcasting"
+  const [txStatus,    setTxStatus]    = useState("idle");
   const [result,      setResult]      = useState(null);
+
+  // Auto-select chain when wallet connects (if no quote in progress)
+  useEffect(() => {
+    if (wallet?.caip2 && !quote) {
+      const known = CHAIN_OPTIONS.find(c => c.value === wallet.caip2);
+      if (known) setChain(wallet.caip2);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [wallet?.caip2]);
 
   // FIX: strict validation — name, symbol, chain, supply > 0
   const validate = () => {
@@ -254,61 +279,99 @@ export function DeployTokenForm({ wallet, isMobile = false }) {
     setConfirming(true);
   }, []);
 
-  // Step 3: user confirmed in modal — execute deploy
+  // Step 3: user confirmed in modal — register token, get payload, sign with wallet
   const deploy = useCallback(async () => {
-    setDeploying(true);
-    try {
-      // creator_address is required by backend — guard before sending
-      if (!wallet?.isConnected || !wallet?.address) {
-        throw new Error("Connect a wallet before deploying.");
-      }
+    if (!wallet?.isConnected || !wallet?.address) {
+      throw new Error("Connect a wallet before deploying.");
+    }
 
-      const payload = {
-        name:             name.trim(),
-        symbol:           symbol.trim().toUpperCase(),
-        chains:           [chain],
-        supply_percent:   Number(supply),
-        creator_address:  wallet.address,  // required by backend schema
-        description:      description.trim() || undefined,
-        imageUrl:         imageUrl.trim()   || undefined,
-        socials: {
-          website: website.trim() || undefined,
-          twitter: twitter.trim() || undefined,
-        },
+    setDeploying(true);
+    setTxStatus("creating");
+
+    try {
+      // ── Phase 1: register with Printr API, get signing payload ──────────────
+      const body = {
+        name:            name.trim(),
+        symbol:          symbol.trim().toUpperCase(),
+        chains:          [chain],
+        supply_percent:  Number(supply),
+        creator_address: wallet.address,
+        description:     description.trim() || "",
+        ...(imageUrl.trim() && { image_url: imageUrl.trim() }),
+        ...(website.trim()  && { website:   website.trim() }),
+        ...(twitter.trim()  && { twitter:   twitter.trim() }),
       };
 
-      const data = await apiFetch("/printr/token", { method: "POST", body: payload });
+      const data = await apiFetch("/printr/token", { method: "POST", body });
+
+      if (!data.payload) {
+        throw new Error(
+          "Server did not return a signing payload. Cannot broadcast transaction."
+        );
+      }
+
+      // ── Phase 2: prompt wallet ───────────────────────────────────────────────
+      setTxStatus("waiting_wallet");
+      setConfirming(false);   // close modal so wallet popup is visible
+
+      let txHash;
+      try {
+        txHash = await wallet.signEvmPayload(data.payload);
+      } catch (walletErr) {
+        const msg = walletErr?.message ?? "";
+        if (walletErr?.code === 4001 || msg.toLowerCase().includes("rejected") || msg.toLowerCase().includes("denied")) {
+          throw new Error("Transaction rejected in wallet.");
+        }
+        throw walletErr;
+      }
+
+      // ── Phase 3: confirmed → show result ────────────────────────────────────
+      setTxStatus("broadcasting");
 
       setResult({
         status:  "success",
-        txHash:  data.txHash ?? data.transaction?.hash ?? null,
-        chainId: chain.startsWith("solana") ? null : parseInt(chain.split(":")[1]),
+        txHash,
+        chainId: chain.startsWith("solana") ? null : parseInt(chain.split(":")[1], 10),
         token: {
           name:    name.trim(),
           symbol:  symbol.trim().toUpperCase(),
-          address: data.tokenAddress ?? data.address ?? null,
+          address: data.token_address ?? data.address ?? null,
           chain,
         },
       });
-      setConfirming(false);
     } catch (e) {
-      // FIX: rich error surfacing
       setResult({
         status: "error",
-        error:  e?.message || e?.response?.data?.error || "Deployment failed.",
+        error:  e?.message || "Deployment failed.",
       });
       setConfirming(false);
     } finally {
       setDeploying(false);
+      setTxStatus("idle");
     }
   }, [name, symbol, chain, supply, description, imageUrl, website, twitter, wallet]);
 
   const reset = () => {
     setName(""); setSymbol(""); setChain("eip155:8453");
-    setSupply(5);   // FIX: reset supply too
+    setSupply(5);
     setDescription(""); setImageUrl(""); setWebsite(""); setTwitter("");
     setQuote(null); setQuoteErr(null); setResult(null);
-    setConfirming(false);
+    setConfirming(false); setTxStatus("idle");
+  };
+
+  // Network mismatch: wallet is on a different EVM chain than the selected chain
+  const networkMismatch =
+    wallet?.isConnected &&
+    wallet?.caip2 &&
+    !chain.startsWith("solana") &&
+    wallet.caip2 !== chain;
+
+  // Human-readable deploy status label
+  const deployLabel = () => {
+    if (txStatus === "creating")       return "REGISTERING…";
+    if (txStatus === "waiting_wallet") return "CONFIRM IN WALLET…";
+    if (txStatus === "broadcasting")   return "BROADCASTING…";
+    return "DEPLOYING…";
   };
 
   // ── Result screen ──────────────────────────────────────────────────────────
@@ -384,6 +447,23 @@ export function DeployTokenForm({ wallet, isMobile = false }) {
               fontSize: isMobile ? 13 : 11, color: T.yellow, lineHeight: 1.7,
             }}>
               !  Connect a wallet to sign the deployment transaction.
+            </div>
+          )}
+
+          {/* Network mismatch warning */}
+          {networkMismatch && (
+            <div style={{
+              padding: isMobile ? "12px 14px" : "10px 13px",
+              background: T.red + "0a", border: `1px solid ${T.red}30`, borderRadius: 2,
+              fontSize: isMobile ? 13 : 11, color: T.red, lineHeight: 1.7,
+              display: "flex", gap: 7,
+            }}>
+              <span style={{ flexShrink: 0 }}>⚠</span>
+              <span>
+                Wallet is on <strong>{wallet.chainName ?? wallet.caip2}</strong> but selected chain is{" "}
+                <strong>{CHAIN_OPTIONS.find(c => c.value === chain)?.label ?? chain}</strong>.
+                Switch your wallet network or change the chain above.
+              </span>
             </div>
           )}
 
@@ -524,7 +604,9 @@ export function DeployTokenForm({ wallet, isMobile = false }) {
               onEdit={() => setQuote(null)}
               onConfirm={openConfirm}
               deploying={deploying}
+              deployLabel={deployLabel}
               walletMissing={!wallet?.isConnected}
+              networkMismatch={networkMismatch}
               isMobile={isMobile}
             />
           )}
@@ -551,6 +633,52 @@ export function DeployTokenForm({ wallet, isMobile = false }) {
           busy={deploying}
           isMobile={isMobile}
         />
+      )}
+
+      {/* Wallet-waiting overlay — shown after modal closes, before wallet popup resolves */}
+      {txStatus === "waiting_wallet" && (
+        <div style={{
+          position:       "fixed",
+          inset:          0,
+          background:     "rgba(10,10,8,.78)",
+          zIndex:         600,
+          display:        "flex",
+          alignItems:     "center",
+          justifyContent: "center",
+          backdropFilter: "blur(3px)",
+        }}>
+          <div style={{
+            background:   "#111110",
+            border:       `1px solid ${T.amber}40`,
+            borderTop:    `2px solid ${T.amber}`,
+            borderRadius: 2,
+            padding:      "28px 32px",
+            display:      "flex",
+            flexDirection:"column",
+            alignItems:   "center",
+            gap:          16,
+            maxWidth:     320,
+            width:        "90%",
+            textAlign:    "center",
+          }}>
+            <span style={{
+              width: 32, height: 32,
+              borderRadius: "50%",
+              border: `2px solid ${T.amber}25`,
+              borderTopColor: T.amber,
+              animation: "spin .7s linear infinite",
+              flexShrink: 0,
+            }} />
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 600, color: T.text, letterSpacing: "0.08em", marginBottom: 6 }}>
+                CONFIRM IN WALLET
+              </div>
+              <div style={{ fontSize: 11, color: T.sub, lineHeight: 1.7 }}>
+                Check your wallet extension or app and approve the transaction.
+              </div>
+            </div>
+          </div>
+        </div>
       )}
     </>
   );

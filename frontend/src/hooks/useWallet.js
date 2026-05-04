@@ -170,6 +170,23 @@ export function useWallet() {
     return txHash;
   }, [address, chain]);
 
+  // Sign a Printr payload: { to, calldata, value, gas_limit }
+  const signEvmPayload = useCallback(async ({ to, calldata, value, gas_limit }) => {
+    if (!address) throw new Error("Wallet not connected.");
+    if (chain !== "evm") throw new Error("EVM wallet required for this transaction.");
+    const txHash = await window.ethereum.request({
+      method: "eth_sendTransaction",
+      params: [{
+        from:  address,
+        to,
+        data:  calldata,
+        value: value != null ? `0x${BigInt(value).toString(16)}` : "0x0",
+        ...(gas_limit != null && { gas: `0x${BigInt(gas_limit).toString(16)}` }),
+      }],
+    });
+    return txHash;
+  }, [address, chain]);
+
   // Listen for external account/chain changes (EVM only)
   useEffect(() => {
     if (!window.ethereum) return;
@@ -209,11 +226,13 @@ export function useWallet() {
   }, []);
 
   const chainName = chainId ? (CHAIN_NAMES[chainId] ?? `Chain ${chainId}`) : null;
+  const caip2     = chainId ? `eip155:${chainId}` : null;
 
   return {
     address,
     chainId,
     chainName,
+    caip2,
     balance,
     walletId,
     chain,
@@ -222,6 +241,7 @@ export function useWallet() {
     connect,
     disconnect,
     signAndSend,
+    signEvmPayload,
     isConnected: !!address,
     wallets: WALLET_DEFS,
   };
